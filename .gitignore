@@ -1,0 +1,10 @@
+# CLion / CMake build folders
+cmake-build-*/
+.idea/
+
+# macOS
+.DS_Store
+
+# binaries
+*.out
+*.exe
