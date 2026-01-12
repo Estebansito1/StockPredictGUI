@@ -1,133 +1,175 @@
 #include <SFML/Graphics.hpp>
 #include <iostream>
+#include <filesystem>
+#include <vector>
 #include <sstream>
 #include <iomanip>
 
 #include "Predictor.h"
 
+static std::string findAsset(const std::string& relPath) {
+    namespace fs = std::filesystem;
+    std::vector<fs::path> bases = {
+        fs::current_path(),
+        fs::current_path() / "..",
+        fs::current_path() / ".." / "..",
+        fs::current_path() / ".." / ".." / ".."
+    };
+    for (const auto& base : bases) {
+        fs::path candidate = base / relPath;
+        if (fs::exists(candidate)) return candidate.string();
+    }
+    return "";
+}
+
+static bool loadChart(const std::string& path, sf::Texture& tex, sf::Sprite& sprite) {
+    if (!tex.loadFromFile(path)) return false;
+    sprite.setTexture(tex, true);
+    sprite.setScale(0.5f, 0.5f);
+    sprite.setPosition(450.f, 50.f);
+    return true;
+}
+
+static int timeframeFromFilename(const std::string& imagePath) {
+    // expects ...test1.png / test5.png / test30.png
+    if (imagePath.find("test30") != std::string::npos) return 30;
+    if (imagePath.find("test5")  != std::string::npos) return 5;
+    if (imagePath.find("test1")  != std::string::npos) return 1;
+    return -1;
+}
+
 int main() {
-    // -----------------------------
-    // Window
-    // -----------------------------
-    sf::RenderWindow window(
-        sf::VideoMode(900, 500),
-        "C++ Stock Predictor"
-    );
+    sf::RenderWindow window(sf::VideoMode(900, 500), "C++ Stock Predictor");
     window.setFramerateLimit(60);
 
-    // -----------------------------
     // Font
-    // -----------------------------
     sf::Font font;
-    if (!font.loadFromFile("/Users/duca/CLionProjects/StockPredictGUI/assets/fonts/DejaVuSans.ttf")) {
-        std::cerr << "Font missing\n";
+    std::string fontPath = findAsset("assets/fonts/DejaVuSans.ttf");
+    if (fontPath.empty() || !font.loadFromFile(fontPath)) {
+        std::cerr << "Failed to load font\n";
         return 1;
     }
 
+    // Default chart = test1.png
+    std::string chartPath = findAsset("assets/charts/test1.png");
+    if (chartPath.empty()) {
+        std::cerr << "Missing assets/charts/test1.png\n";
+        return 1;
+    }
 
-
-    // -----------------------------
-    // Chart Image
-    // -----------------------------
     sf::Texture chartTexture;
-    if (!chartTexture.loadFromFile("../assets/charts/test.png")) {
-        std::cerr << "Chart image missing\n";
+    sf::Sprite  chartSprite;
+    if (!loadChart(chartPath, chartTexture, chartSprite)) {
+        std::cerr << "Failed to load chart image\n";
         return 1;
     }
 
+    // Predictor
+    Predictor predictor;
 
-    sf::Sprite chart(chartTexture);
-    chart.setScale(0.5f, 0.5f);
-    chart.setPosition(450.f, 50.f);
+    // ====== runtime state ======
+    int currentTF = timeframeFromFilename(chartPath);   // 1,5,30
+    std::string currentTimeStr = "09:25";               // you can change this later
 
-    sf::Image chartImage = chartTexture.copyToImage();
-
-    // -----------------------------
-    // Text UI
-    // -----------------------------
-    sf::Text title;
-    title.setFont(font);
-    title.setCharacterSize(26);
-    title.setString("Stock Trend Prediction (C++)");
+    // UI text (left panel)
+    sf::Text title("Stock Trend Prediction (C++)", font, 34);
     title.setPosition(20.f, 20.f);
 
-    sf::Text instructions;
-    instructions.setFont(font);
-    instructions.setCharacterSize(18);
-    instructions.setString("Press P to Predict\nPress ESC to Quit");
-    instructions.setPosition(20.f, 70.f);
+    sf::Text instructions(
+        "Hotkeys:\n"
+        "  P = Predict\n"
+        "  1 = Load test1 (1m)\n"
+        "  5 = Load test5 (5m)\n"
+        "  3 = Load test30 (30m)\n"
+        "  ESC = Quit",
+        font, 18
+    );
+    instructions.setPosition(20.f, 80.f);
+    instructions.setLineSpacing(1.25f);
 
-    sf::Text resultText;
-    resultText.setFont(font);
-    resultText.setCharacterSize(20);
-    resultText.setString("Waiting for prediction...");
-    resultText.setPosition(20.f, 150.f);
+    sf::Text statusText("", font, 18);
+    statusText.setPosition(20.f, 230.f);
+    statusText.setLineSpacing(1.25f);
 
-    // -----------------------------
-    // Trend Line
-    // -----------------------------
-    sf::VertexArray trendLine(sf::LineStrip);
-    bool hasPrediction = false;
+    sf::Text resultText("Waiting for prediction...", font, 22);
+    resultText.setPosition(20.f, 300.f);
+    resultText.setLineSpacing(1.25f);
 
-    // -----------------------------
-    // Main Loop
-    // -----------------------------
+    auto updateStatus = [&]() {
+        std::ostringstream oss;
+        oss << "Loaded: " << std::filesystem::path(chartPath).filename().string()
+            << "\nTimeframe: " << currentTF << "m"
+            << "\nMarket time: " << currentTimeStr;
+        statusText.setString(oss.str());
+    };
+
+    updateStatus();
+
+    auto switchChart = [&](const std::string& rel) {
+        std::string newPath = findAsset(rel);
+        if (newPath.empty()) {
+            resultText.setString("Error: missing " + rel);
+            return;
+        }
+        if (!loadChart(newPath, chartTexture, chartSprite)) {
+            resultText.setString("Error: failed loading " + rel);
+            return;
+        }
+        chartPath = newPath;
+        currentTF = timeframeFromFilename(chartPath);
+        updateStatus();
+        resultText.setString("Switched chart. Press P to Predict.");
+    };
+
     while (window.isOpen()) {
-        sf::Event event;
+        sf::Event event{};
         while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed)
-                window.close();
+            if (event.type == sf::Event::Closed) window.close();
 
             if (event.type == sf::Event::KeyPressed) {
-                if (event.key.code == sf::Keyboard::Escape)
-                    window.close();
+                if (event.key.code == sf::Keyboard::Escape) window.close();
 
+                // Switch images
+                if (event.key.code == sf::Keyboard::Num1) {
+                    switchChart("assets/charts/test1.png");
+                }
+                if (event.key.code == sf::Keyboard::Num5) {
+                    switchChart("assets/charts/test5.png");
+                }
+                if (event.key.code == sf::Keyboard::Num3) {
+                    switchChart("assets/charts/test30.png");
+                }
+
+                // Predict
                 if (event.key.code == sf::Keyboard::P) {
-                    Prediction p = predictTrend(chartImage);
+                    try {
+                        Prediction pred = predictor.predictWithTime(chartPath, currentTimeStr);
 
-                    trendLine.clear();
+                        std::ostringstream oss;
+                        oss << "Prediction: " << pred.label
+                            << "\nBullish: " << std::fixed << std::setprecision(1) << (pred.pBull * 100.0) << "%"
+                            << "\nBearish: " << std::fixed << std::setprecision(1) << (pred.pBear * 100.0) << "%"
+                            << "\nConfidence: " << std::fixed << std::setprecision(1) << pred.confidence << "%";
 
-                    for (const auto& pt : p.trendPoints) {
-                        sf::Vector2f screenPoint;
-                        screenPoint.x =
-                            chart.getPosition().x + pt.x * chart.getScale().x;
-                        screenPoint.y =
-                            chart.getPosition().y + pt.y * chart.getScale().y;
-
-                        trendLine.append(
-                            sf::Vertex(screenPoint, sf::Color::Red)
-                        );
+                        resultText.setString(oss.str());
+                    } catch (const std::exception& e) {
+                        resultText.setString(std::string("Error: ") + e.what());
                     }
-
-                    hasPrediction = true;
-
-                    std::ostringstream oss;
-                    oss << "Prediction: " << p.label
-                        << "\nConfidence: "
-                        << std::fixed << std::setprecision(1)
-                        << (p.confidence * 100.f) << "%";
-
-                    resultText.setString(oss.str());
                 }
             }
         }
 
-        // -----------------------------
-        // Draw
-        // -----------------------------
         window.clear(sf::Color(25, 25, 25));
-
         window.draw(title);
         window.draw(instructions);
+        window.draw(statusText);
         window.draw(resultText);
-        window.draw(chart);
-
-        if (hasPrediction) {
-            window.draw(trendLine);
-        }
-
+        window.draw(chartSprite);
         window.display();
     }
 
     return 0;
 }
+
+
+

@@ -6,8 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
 
-add_executable(StockPredictGUI main.cpp Predictor.cpp)
+add_executable(StockPredictGUI
+        main.cpp
+        Predictor.cpp
+)
+
 target_link_libraries(StockPredictGUI PRIVATE sfml-graphics sfml-window sfml-system)
+
 
 
 
